@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets — NEVER commit
+*.key
+*.pem
+credentials.json
+config.local.*
+config/*.local.*
+secrets/
+api_keys.txt
+.env.production
+
+# Pentest output — NEVER commit
+loot/
+scans/
+recon_output/
+engagements/*/
+!engagements/.gitkeep
+targets/
+*.nmap
+*.gnmap
+*.xml
+nuclei_output/
+*.har
+*.session
+
+# Logs
+*.log
+logs/
+
+# LLM artifacts
+models/
+*.gguf
+ollama_data/
+
+# Wordlists (huge, not yours to redistribute)
+wordlists/

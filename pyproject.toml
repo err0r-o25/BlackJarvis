@@ -1,0 +1,15 @@
+[project]
+name = "blackjarvis"
+version = "0.1.0"
+description = "Local AI assistant for  security research and bug bounty automation"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["requests>=2.32.0"
+]
+
+[project.scripts]
+blackjarvis = "blackjarvis.core.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
