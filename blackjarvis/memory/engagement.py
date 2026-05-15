@@ -1,9 +1,4 @@
-"""Engagement: a named scope of authorized work.
-
-An engagement is the unit of bug bounty work — typically one program
-(e.g. "acme-corp-bb") or one personal lab ("home-lab"). Every tool
-invocation belongs to an engagement, and scope rules attach here.
-"""
+"""Engagement: a named scope of authorized work."""
 from __future__ import annotations
 
 import fnmatch
@@ -24,7 +19,6 @@ class OutOfScopeError(RuntimeError):
 
 @dataclass
 class Scope:
-    """In-scope and out-of-scope patterns. fnmatch-style wildcards."""
     in_scope: list[str] = field(default_factory=list)
     out_of_scope: list[str] = field(default_factory=list)
 
@@ -62,20 +56,16 @@ class Engagement:
         return cls(**data)
 
     def is_in_scope(self, target: str) -> bool:
-        """Return True iff target matches an in-scope pattern AND no out-of-scope."""
         t = target.lower().strip()
-        # Out-of-scope wins
         for pat in self.scope.out_of_scope:
             if fnmatch.fnmatch(t, pat.lower()):
                 return False
-        # Must match at least one in-scope pattern
         for pat in self.scope.in_scope:
             if fnmatch.fnmatch(t, pat.lower()):
                 return True
         return False
 
     def assert_in_scope(self, target: str) -> None:
-        """Raise OutOfScopeError if target is not authorized."""
         if not self.is_in_scope(target):
             raise OutOfScopeError(
                 f"{target!r} is not in scope for engagement {self.id!r}"
@@ -83,7 +73,6 @@ class Engagement:
 
 
 def list_engagements() -> list[Engagement]:
-    """List all engagements on disk."""
     if not ENGAGEMENTS_DIR.exists():
         return []
     out = []
@@ -104,7 +93,6 @@ def new_engagement(
     out_of_scope: list[str] | None = None,
     platform: str = "",
 ) -> Engagement:
-    """Create and save a new engagement."""
     if (ENGAGEMENTS_DIR / eid / "engagement.json").exists():
         raise FileExistsError(f"engagement {eid!r} already exists")
     eng = Engagement(
