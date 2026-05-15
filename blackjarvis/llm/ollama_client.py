@@ -1,9 +1,7 @@
-"""Ollama HTTP client for BlackJarvis.
-
-Talks to a locally running Ollama instance. All requests stay on the machine.
-"""
+"""Ollama HTTP client for BlackJarvis."""
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Iterator
@@ -15,20 +13,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OllamaConfig:
-    """Configuration for the Ollama client."""
     base_url: str = "http://localhost:11434"
     model: str = "qwen2.5:3b"
-    timeout: int = 120
+    timeout: int = 300
 
 
 class OllamaClient:
-    """Thin wrapper around the Ollama HTTP API."""
-
     def __init__(self, config: OllamaConfig | None = None) -> None:
         self.config = config or OllamaConfig()
 
     def is_alive(self) -> bool:
-        """Check if the Ollama daemon is reachable."""
         try:
             r = requests.get(self.config.base_url, timeout=5)
             return r.status_code == 200
@@ -40,17 +34,17 @@ class OllamaClient:
         prompt: str,
         system: str | None = None,
         stream: bool = False,
+        temperature: float = 0.7,
     ) -> str:
-        """Send a single-turn prompt, return the full response as a string."""
         payload = {
             "model": self.config.model,
             "prompt": prompt,
             "stream": stream,
+            "options": {"temperature": temperature},
         }
         if system is not None:
             payload["system"] = system
 
-        logger.debug("Sending prompt to model=%s len=%d", self.config.model, len(prompt))
         r = requests.post(
             f"{self.config.base_url}/api/generate",
             json=payload,
@@ -59,13 +53,17 @@ class OllamaClient:
         r.raise_for_status()
         return r.json()["response"]
 
-    def stream(self, prompt: str, system: str | None = None) -> Iterator[str]:
-        """Stream tokens as they arrive. Yields text chunks."""
-        import json
+    def stream(
+        self,
+        prompt: str,
+        system: str | None = None,
+        temperature: float = 0.7,
+    ) -> Iterator[str]:
         payload = {
             "model": self.config.model,
             "prompt": prompt,
             "stream": True,
+            "options": {"temperature": temperature},
         }
         if system is not None:
             payload["system"] = system
