@@ -22,21 +22,21 @@ ROUTER_PROMPT = """You are a JSON tool router. Output ONLY a JSON object. No pro
 
 Tools:
 1. {"tool": "list_engagements", "args": {}}
-   - When user asks to list/show/see engagements or projects.
+   - For: list/show/see engagements/projects
 2. {"tool": "subfinder", "args": {"target": "<domain>", "engagement": "<id>"}}
-   - When user asks to find/discover/enumerate subdomains.
-3. {"tool": "chat", "args": {"text": "<user message>"}}
-   - For anything else.
+   - For: find/discover/enumerate subdomains only
+3. {"tool": "recon_pipeline", "args": {"target": "<domain>", "engagement": "<id>", "do_scan": false}}
+   - For: full recon, recon pipeline, complete recon, recon chain, scan everything
+   - Set do_scan=true ONLY if user explicitly asks to scan for vulns/nuclei
+4. {"tool": "chat", "args": {"text": "<message>"}}
+   - For anything else (greetings, questions, explanations)
 
 Examples:
 
-User: list all my engagements
+User: list my engagements
 {"tool": "list_engagements", "args": {}}
 
 User: show me my projects
-{"tool": "list_engagements", "args": {}}
-
-User: what engagements do I have
 {"tool": "list_engagements", "args": {}}
 
 User: find subdomains for tesla.com on engagement tesla-bb
@@ -45,20 +45,27 @@ User: find subdomains for tesla.com on engagement tesla-bb
 User: enumerate subs for example.com using iana-example
 {"tool": "subfinder", "args": {"target": "example.com", "engagement": "iana-example"}}
 
-User: hello how are you
-{"tool": "chat", "args": {"text": "hello how are you"}}
+User: do a full recon pipeline on example.com for iana-example
+{"tool": "recon_pipeline", "args": {"target": "example.com", "engagement": "iana-example", "do_scan": false}}
+
+User: run complete recon on tesla.com on tesla-bb engagement
+{"tool": "recon_pipeline", "args": {"target": "tesla.com", "engagement": "tesla-bb", "do_scan": false}}
+
+User: full recon with vuln scan on example.com using iana-example
+{"tool": "recon_pipeline", "args": {"target": "example.com", "engagement": "iana-example", "do_scan": true}}
+
+User: what is a subdomain
+{"tool": "chat", "args": {"text": "what is a subdomain"}}
+
+User: hello
+{"tool": "chat", "args": {"text": "hello"}}
 
 User: %s
 """
 
-JSON_RE = re.compile(r"\{.*?\}(?:\s*\})*", re.DOTALL)
-
 
 def parse_intent(raw: str) -> Intent:
-    """Extract a tool-shaped JSON object from raw model output.
-
-    Tries each {...} match in order. Returns the first one that has 'tool'.
-    """
+    """Iterate {...} matches, return the first one with a 'tool' key."""
     matches = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.DOTALL)
     last_err: Exception | None = None
     for candidate in matches:
@@ -75,9 +82,7 @@ def parse_intent(raw: str) -> Intent:
 
 
 def route(user_input: str, llm: OllamaClient) -> Intent:
-    """Ask the LLM to classify intent. Fall back to 'chat' on parse failure."""
     prompt = ROUTER_PROMPT % user_input
-    # Lower temperature → more deterministic, sticks to format
     raw = llm.generate(prompt=prompt, system=None, temperature=0.1)
     logger.debug("router raw output: %r", raw)
     try:

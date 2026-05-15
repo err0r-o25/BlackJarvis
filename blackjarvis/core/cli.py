@@ -15,6 +15,10 @@ from blackjarvis.memory.engagement import (
     new_engagement,
 )
 from blackjarvis.tools.subfinder import recon_subdomains
+from blackjarvis.recon.pipeline import (
+    run_recon_pipeline,
+    persist_pipeline_result,
+)
 
 
 def setup_logging(verbose: bool) -> None:
@@ -26,9 +30,6 @@ def setup_logging(verbose: bool) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# hello / ask (existing, kept)
-# ---------------------------------------------------------------------------
 def cmd_hello(args) -> int:
     client = OllamaClient()
     if not client.is_alive():
@@ -48,7 +49,6 @@ def cmd_hello(args) -> int:
 
 
 def cmd_ask(args) -> int:
-    """Ask BLACKJARVIS something. Routes to a tool if appropriate."""
     client = OllamaClient()
     if not client.is_alive():
         print("❌ Ollama not reachable", file=sys.stderr)
@@ -65,12 +65,10 @@ def cmd_ask(args) -> int:
     observation = handler(intent.args, ctx={})
 
     if intent.tool == "chat":
-        # For chat, stream a real LLM response to the user's input
         for chunk in client.stream(prompt=observation, system=SYSTEM_PROMPT):
             print(chunk, end="", flush=True)
         print()
     else:
-        # For tool results, print observation then ask LLM to summarize
         print(observation)
         print()
         print("--- summary ---")
@@ -78,7 +76,7 @@ def cmd_ask(args) -> int:
             f"The user asked: {args.prompt!r}\n"
             f"You ran the {intent.tool} tool and got this output:\n\n"
             f"{observation}\n\n"
-            f"In 2-3 short sentences, summarize what was found and suggest one next step."
+            f"In 2-3 short sentences, summarize what was found and suggest one concrete next step."
         )
         for chunk in client.stream(prompt=summary_prompt, system=SYSTEM_PROMPT):
             print(chunk, end="", flush=True)
@@ -86,9 +84,6 @@ def cmd_ask(args) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# engagement subcommands
-# ---------------------------------------------------------------------------
 def cmd_eng_list(args) -> int:
     engs = list_engagements()
     if not engs:
@@ -105,8 +100,7 @@ def cmd_eng_list(args) -> int:
 def cmd_eng_new(args) -> int:
     try:
         eng = new_engagement(
-            args.id,
-            args.name,
+            args.id, args.name,
             in_scope=args.in_scope,
             out_of_scope=args.out_of_scope or [],
             platform=args.platform or "",
@@ -118,9 +112,6 @@ def cmd_eng_new(args) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# recon subcommands
-# ---------------------------------------------------------------------------
 def cmd_recon_subs(args) -> int:
     try:
         eng = Engagement.load(args.engagement)
@@ -137,9 +128,28 @@ def cmd_recon_subs(args) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# parser
-# ---------------------------------------------------------------------------
+def cmd_recon_pipeline(args) -> int:
+    try:
+        eng = Engagement.load(args.engagement)
+    except FileNotFoundError:
+        print(f"Error: engagement {args.engagement!r} not found", file=sys.stderr)
+        return 1
+    try:
+        result = run_recon_pipeline(
+            args.target, eng,
+            do_subs=True, do_probe=True, do_scan=args.scan,
+            max_probe_hosts=args.max_probe,
+            max_scan_hosts=args.max_scan,
+        )
+        path = persist_pipeline_result(result, eng)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(result.summary())
+    print(f"\nsaved → {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="blackjarvis",
@@ -153,24 +163,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_ask = sub.add_parser("ask", help="Ask in plain English; routes to a tool.")
     p_ask.add_argument("prompt")
 
-    # engagement
     p_eng = sub.add_parser("engagement", help="Manage engagements.")
     eng_sub = p_eng.add_subparsers(dest="eng_cmd", required=True)
     eng_sub.add_parser("list", help="List all engagements.")
     p_new = eng_sub.add_parser("new", help="Create a new engagement.")
-    p_new.add_argument("id", help="Short identifier (kebab-case).")
-    p_new.add_argument("name", help="Human-readable name.")
-    p_new.add_argument("--in-scope", nargs="+", required=True, help="In-scope patterns.")
-    p_new.add_argument("--out-of-scope", nargs="*", default=[], help="Out-of-scope patterns.")
-    p_new.add_argument("--platform", default="", help="hackerone, bugcrowd, etc.")
+    p_new.add_argument("id")
+    p_new.add_argument("name")
+    p_new.add_argument("--in-scope", nargs="+", required=True)
+    p_new.add_argument("--out-of-scope", nargs="*", default=[])
+    p_new.add_argument("--platform", default="")
 
-    # recon
-    p_recon = sub.add_parser("recon", help="Run reconnaissance tools.")
+    p_recon = sub.add_parser("recon", help="Run reconnaissance.")
     recon_sub = p_recon.add_subparsers(dest="recon_cmd", required=True)
-    p_subs = recon_sub.add_parser("subs", help="Subdomain enumeration.")
+
+    p_subs = recon_sub.add_parser("subs", help="Subdomain enumeration only.")
     p_subs.add_argument("--engagement", required=True)
     p_subs.add_argument("--target", required=True)
-    p_subs.add_argument("--timeout", type=int, default=180)
+    p_subs.add_argument("--timeout", type=int, default=240)
+
+    p_pipe = recon_sub.add_parser("pipeline", help="Full recon: subs → probe → (optional) scan.")
+    p_pipe.add_argument("--engagement", required=True)
+    p_pipe.add_argument("--target", required=True)
+    p_pipe.add_argument("--scan", action="store_true",
+                        help="Include nuclei vuln scan stage (slow).")
+    p_pipe.add_argument("--max-probe", type=int, default=500)
+    p_pipe.add_argument("--max-scan", type=int, default=100)
 
     return p
 
@@ -186,6 +203,7 @@ def main(argv=None) -> int:
         ("engagement", "list"): cmd_eng_list,
         ("engagement", "new"): cmd_eng_new,
         ("recon", "subs"): cmd_recon_subs,
+        ("recon", "pipeline"): cmd_recon_pipeline,
     }
     sub_cmd = getattr(args, "eng_cmd", None) or getattr(args, "recon_cmd", None)
     handler = dispatch.get((args.command, sub_cmd))
