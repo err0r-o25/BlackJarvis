@@ -1,8 +1,4 @@
-"""Tool registry: maps tool names to Python callables the LLM can invoke.
-
-Each tool takes a dict of args and a context dict, and returns a string
-suitable for feeding back to the LLM as observation.
-"""
+"""Tool registry: maps tool names to Python callables the LLM can invoke."""
 from __future__ import annotations
 
 import logging
@@ -13,18 +9,12 @@ from blackjarvis.memory.engagement import (
     OutOfScopeError,
     list_engagements,
 )
-from blackjarvis.tools.subfinder import (
-    SubfinderError,
-    recon_subdomains,
-)
-from blackjarvis.tools.httpx import (
-    HttpxError,
-    probe_targets,
-)
-from blackjarvis.recon.pipeline import (
-    run_recon_pipeline,
-    persist_pipeline_result,
-)
+from blackjarvis.memory.diff import diff_subfinder_runs, diff_httpx_runs
+from blackjarvis.memory.findings import list_findings, new_finding
+from blackjarvis.memory.notes import append_note
+from blackjarvis.tools.subfinder import SubfinderError, recon_subdomains
+from blackjarvis.tools.httpx import HttpxError, probe_targets
+from blackjarvis.recon.pipeline import run_recon_pipeline, persist_pipeline_result
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +27,16 @@ def register(name: str):
         TOOL_REGISTRY[name] = fn
         return fn
     return deco
+
+
+def _load_engagement(eng_id: str) -> Engagement | str:
+    """Load an engagement or return an error string."""
+    if not eng_id:
+        return "Error: an 'engagement' argument is required."
+    try:
+        return Engagement.load(eng_id)
+    except FileNotFoundError:
+        return f"Error: engagement {eng_id!r} not found."
 
 
 @register("list_engagements")
@@ -54,90 +54,34 @@ def tool_list_engagements(args: dict, ctx: dict) -> str:
 @register("subfinder")
 def tool_subfinder(args: dict, ctx: dict) -> str:
     target = args.get("target", "").strip()
-    eng_id = args.get("engagement", "").strip()
+    eng = _load_engagement(args.get("engagement", "").strip())
+    if isinstance(eng, str):
+        return eng
     if not target:
         return "Error: subfinder needs a 'target' argument."
-    if not eng_id:
-        return "Error: subfinder needs an 'engagement' argument."
-
-    try:
-        eng = Engagement.load(eng_id)
-    except FileNotFoundError:
-        return f"Error: engagement {eng_id!r} not found."
-
     try:
         result, path = recon_subdomains(target, eng, timeout=240)
     except OutOfScopeError as e:
         return f"Refused (out of scope): {e}"
     except SubfinderError as e:
         return f"subfinder failed: {e}"
-
     preview = ", ".join(result.subdomains[:10])
     more = f" (+{len(result.subdomains) - 10} more)" if len(result.subdomains) > 10 else ""
-    return (
-        f"{result.summary()}\n"
-        f"Saved to {path}.\n"
-        f"First subdomains: {preview}{more}"
-    )
-
-
-@register("probe")
-def tool_probe(args: dict, ctx: dict) -> str:
-    """Probe a list of hosts (or 'all subs from last subfinder run') with httpx."""
-    eng_id = args.get("engagement", "").strip()
-    targets_arg = args.get("targets", [])
-    label = args.get("label", "manual").strip() or "manual"
-
-    if not eng_id:
-        return "Error: probe needs an 'engagement' argument."
-    if not targets_arg:
-        return "Error: probe needs a 'targets' list."
-
-    try:
-        eng = Engagement.load(eng_id)
-    except FileNotFoundError:
-        return f"Error: engagement {eng_id!r} not found."
-
-    # Accept either list or comma-separated string
-    if isinstance(targets_arg, str):
-        targets = [t.strip() for t in targets_arg.split(",") if t.strip()]
-    else:
-        targets = list(targets_arg)
-
-    try:
-        result, path = probe_targets(targets, eng, label=label, timeout=300)
-    except OutOfScopeError as e:
-        return f"Refused (out of scope): {e}"
-    except HttpxError as e:
-        return f"httpx failed: {e}"
-
-    alive_preview = "\n".join(
-        f"  {h.status_code} {h.url} tech={h.tech}" for h in result.alive_hosts[:5]
-    )
-    return f"{result.summary()}\nSaved to {path}.\n{alive_preview}"
+    return f"{result.summary()}\nSaved to {path}.\nFirst subdomains: {preview}{more}"
 
 
 @register("recon_pipeline")
 def tool_recon_pipeline(args: dict, ctx: dict) -> str:
-    """Full recon chain: subfinder → httpx → (optionally) nuclei."""
     target = args.get("target", "").strip()
-    eng_id = args.get("engagement", "").strip()
-    do_scan = bool(args.get("do_scan", False))
-
+    eng = _load_engagement(args.get("engagement", "").strip())
+    if isinstance(eng, str):
+        return eng
     if not target:
         return "Error: recon_pipeline needs a 'target' argument."
-    if not eng_id:
-        return "Error: recon_pipeline needs an 'engagement' argument."
-
-    try:
-        eng = Engagement.load(eng_id)
-    except FileNotFoundError:
-        return f"Error: engagement {eng_id!r} not found."
-
+    do_scan = bool(args.get("do_scan", False))
     try:
         result = run_recon_pipeline(
-            target, eng,
-            do_subs=True, do_probe=True, do_scan=do_scan,
+            target, eng, do_subs=True, do_probe=True, do_scan=do_scan,
             max_probe_hosts=500,
         )
         path = persist_pipeline_result(result, eng)
@@ -145,8 +89,56 @@ def tool_recon_pipeline(args: dict, ctx: dict) -> str:
         return f"Refused (out of scope): {e}"
     except Exception as e:
         return f"Pipeline error: {e}"
-
     return f"{result.summary()}\n\nPipeline summary saved to {path}."
+
+
+@register("recon_diff")
+def tool_recon_diff(args: dict, ctx: dict) -> str:
+    target = args.get("target", "").strip()
+    eng = _load_engagement(args.get("engagement", "").strip())
+    if isinstance(eng, str):
+        return eng
+    diff_type = (args.get("type", "subs") or "subs").strip().lower()
+    if not target:
+        return "Error: recon_diff needs a 'target' argument."
+    try:
+        if diff_type == "probe":
+            d = diff_httpx_runs(eng, target)
+        else:
+            d = diff_subfinder_runs(eng, target)
+    except Exception as e:
+        return f"Diff error: {e}"
+    return d.summary()
+
+
+@register("findings_list")
+def tool_findings_list(args: dict, ctx: dict) -> str:
+    eng = _load_engagement(args.get("engagement", "").strip())
+    if isinstance(eng, str):
+        return eng
+    status = args.get("status") or None
+    findings = list_findings(eng, status=status)
+    if not findings:
+        return f"No findings for engagement {eng.id!r}" + (
+            f" with status {status!r}." if status else "."
+        )
+    lines = [f"Found {len(findings)} finding(s) for {eng.id!r}:"]
+    for f in findings:
+        lines.append(f"  [{f.severity}] {f.status}  {f.title}  ({f.id})")
+    return "\n".join(lines)
+
+
+@register("note_add")
+def tool_note_add(args: dict, ctx: dict) -> str:
+    eng = _load_engagement(args.get("engagement", "").strip())
+    if isinstance(eng, str):
+        return eng
+    text = (args.get("text", "") or "").strip()
+    if not text:
+        return "Error: note_add needs a 'text' argument."
+    tag = (args.get("tag", "") or "").strip()
+    append_note(eng, text, tag=tag)
+    return f"Note saved to engagement {eng.id!r}."
 
 
 @register("chat")

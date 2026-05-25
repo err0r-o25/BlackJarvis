@@ -22,50 +22,55 @@ ROUTER_PROMPT = """You are a JSON tool router. Output ONLY a JSON object. No pro
 
 Tools:
 1. {"tool": "list_engagements", "args": {}}
-   - For: list/show/see engagements/projects
 2. {"tool": "subfinder", "args": {"target": "<domain>", "engagement": "<id>"}}
-   - For: find/discover/enumerate subdomains only
 3. {"tool": "recon_pipeline", "args": {"target": "<domain>", "engagement": "<id>", "do_scan": false}}
-   - For: full recon, recon pipeline, complete recon, recon chain, scan everything
-   - Set do_scan=true ONLY if user explicitly asks to scan for vulns/nuclei
-4. {"tool": "chat", "args": {"text": "<message>"}}
-   - For anything else (greetings, questions, explanations)
+4. {"tool": "recon_diff", "args": {"target": "<domain>", "engagement": "<id>", "type": "subs"}}
+5. {"tool": "findings_list", "args": {"engagement": "<id>", "status": null}}
+6. {"tool": "note_add", "args": {"engagement": "<id>", "text": "<note text>", "tag": ""}}
+7. {"tool": "chat", "args": {"text": "<message>"}}
+
+Rules:
+- subfinder = subdomains only. recon_pipeline = full recon (subs+probe).
+- recon_diff = "what changed / what's new" since last run.
+- do_scan true ONLY if user explicitly wants a vuln/nuclei scan.
 
 Examples:
 
 User: list my engagements
 {"tool": "list_engagements", "args": {}}
 
-User: show me my projects
-{"tool": "list_engagements", "args": {}}
-
 User: find subdomains for tesla.com on engagement tesla-bb
 {"tool": "subfinder", "args": {"target": "tesla.com", "engagement": "tesla-bb"}}
-
-User: enumerate subs for example.com using iana-example
-{"tool": "subfinder", "args": {"target": "example.com", "engagement": "iana-example"}}
 
 User: do a full recon pipeline on example.com for iana-example
 {"tool": "recon_pipeline", "args": {"target": "example.com", "engagement": "iana-example", "do_scan": false}}
 
-User: run complete recon on tesla.com on tesla-bb engagement
-{"tool": "recon_pipeline", "args": {"target": "tesla.com", "engagement": "tesla-bb", "do_scan": false}}
-
 User: full recon with vuln scan on example.com using iana-example
 {"tool": "recon_pipeline", "args": {"target": "example.com", "engagement": "iana-example", "do_scan": true}}
 
+User: what subdomains are new on example.com for iana-example
+{"tool": "recon_diff", "args": {"target": "example.com", "engagement": "iana-example", "type": "subs"}}
+
+User: what changed on example.com since last recon on iana-example
+{"tool": "recon_diff", "args": {"target": "example.com", "engagement": "iana-example", "type": "subs"}}
+
+User: show me findings for iana-example
+{"tool": "findings_list", "args": {"engagement": "iana-example", "status": null}}
+
+User: list draft findings for tesla-bb
+{"tool": "findings_list", "args": {"engagement": "tesla-bb", "status": "draft"}}
+
+User: take a note on iana-example that the search endpoint looks interesting
+{"tool": "note_add", "args": {"engagement": "iana-example", "text": "the search endpoint looks interesting", "tag": ""}}
+
 User: what is a subdomain
 {"tool": "chat", "args": {"text": "what is a subdomain"}}
-
-User: hello
-{"tool": "chat", "args": {"text": "hello"}}
 
 User: %s
 """
 
 
 def parse_intent(raw: str) -> Intent:
-    """Iterate {...} matches, return the first one with a 'tool' key."""
     matches = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw, re.DOTALL)
     last_err: Exception | None = None
     for candidate in matches:
