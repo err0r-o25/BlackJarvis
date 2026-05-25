@@ -120,11 +120,26 @@ def run_subfinder(
 
 
 def persist_result(result: SubfinderResult, engagement: Engagement) -> Path:
-    """Write the result to <engagement>/recon/subfinder_<target>.json."""
+    """Write the result to <engagement>/recon/subfinder_<target>.json.
+
+    If a previous run exists, archive it with a timestamp suffix first,
+    so diff tooling has history to compare against.
+    """
+    import shutil
+    from datetime import datetime
+
     recon_dir = engagement.dir / "recon"
     recon_dir.mkdir(parents=True, exist_ok=True)
     safe = result.target.replace("/", "_").replace("..", "_")
     out = recon_dir / f"subfinder_{safe}.json"
+
+    # Archive an existing run before overwriting
+    if out.exists():
+        ts = datetime.fromtimestamp(out.stat().st_mtime).strftime("%Y%m%d-%H%M%S")
+        archive = recon_dir / f"subfinder_{safe}_{ts}.json"
+        shutil.copy2(out, archive)
+        logger.info("archived previous run to %s", archive)
+
     out.write_text(json.dumps(result.to_json(), indent=2))
     logger.info("wrote %d subdomains to %s", len(result.subdomains), out)
     return out
