@@ -1,10 +1,14 @@
-"""Ollama HTTP client for BlackJarvis."""
+"""Ollama HTTP client for BlackJarvis.
+
+Supports both /api/generate (single-turn text) and /api/chat (multi-turn
+with native function calling via the 'tools' parameter).
+"""
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 import requests
 
@@ -14,7 +18,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OllamaConfig:
     base_url: str = "http://localhost:11434"
-    model: str = "qwen2.5:3b"
+    model: str = "qwen2.5:7b"
     timeout: int = 300
 
 
@@ -36,6 +40,7 @@ class OllamaClient:
         stream: bool = False,
         temperature: float = 0.7,
     ) -> str:
+        """Single-turn text completion via /api/generate."""
         payload = {
             "model": self.config.model,
             "prompt": prompt,
@@ -44,11 +49,9 @@ class OllamaClient:
         }
         if system is not None:
             payload["system"] = system
-
         r = requests.post(
             f"{self.config.base_url}/api/generate",
-            json=payload,
-            timeout=self.config.timeout,
+            json=payload, timeout=self.config.timeout,
         )
         r.raise_for_status()
         return r.json()["response"]
@@ -59,6 +62,7 @@ class OllamaClient:
         system: str | None = None,
         temperature: float = 0.7,
     ) -> Iterator[str]:
+        """Stream tokens from /api/generate."""
         payload = {
             "model": self.config.model,
             "prompt": prompt,
@@ -67,12 +71,9 @@ class OllamaClient:
         }
         if system is not None:
             payload["system"] = system
-
         with requests.post(
             f"{self.config.base_url}/api/generate",
-            json=payload,
-            timeout=self.config.timeout,
-            stream=True,
+            json=payload, timeout=self.config.timeout, stream=True,
         ) as r:
             r.raise_for_status()
             for line in r.iter_lines():
@@ -83,3 +84,34 @@ class OllamaClient:
                     yield chunk["response"]
                 if chunk.get("done"):
                     break
+
+    def chat(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+    ) -> dict[str, Any]:
+        """Multi-turn chat via /api/chat, with optional native tool calling.
+
+        messages: [{"role": "system"|"user"|"assistant"|"tool", "content": "..."}]
+        tools:    OpenAI-style function schemas (see core/router.py TOOL_SCHEMAS)
+
+        Returns the assistant message dict. If the model decided to call a
+        tool, it contains a 'tool_calls' list:
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"function": {"name": "...", "arguments": {...}}}]}
+        """
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+        if tools:
+            payload["tools"] = tools
+        r = requests.post(
+            f"{self.config.base_url}/api/chat",
+            json=payload, timeout=self.config.timeout,
+        )
+        r.raise_for_status()
+        return r.json()["message"]
